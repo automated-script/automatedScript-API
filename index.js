@@ -22,18 +22,16 @@ app.use(express.json());
 
 // ---- Base users ----
 const baseUsers = [
-  { id: 1, name: 'Milind',  role: 'Engineer' },
-  { id: 2, name: 'Sunita', role: 'QA' },
-  { id: 3, name: 'Seha',  role: 'Designer' },
-  { id: 4, name: 'Omansh', role: 'DevOps' },
-  { id: 5, name: 'Ritesh', role: 'Product Manager' },
-  { id: 6, name: 'Namrata', role: 'Backend Engineer' },
-  { id: 7, name: 'Harshika', role: 'Frontend Engineer' },
-  { id: 8, name: 'Nityam', role: 'QA' },
-  { id: 9, name: 'Mahesh', role: 'UX Designer' },
-  { id: 10, name: 'Garvita', role: 'Engineer' },
-  { id: 11, name: 'Ishaan', role: 'Delivery Manager' },
-  { id: 12, name: 'Riddhi', role: 'Program Manager' }
+  { id: 1, name: 'Asha',  role: 'Engineer' },
+  { id: 2, name: 'Rahul', role: 'QA' },
+  { id: 3, name: 'Neha',  role: 'Designer' },
+  { id: 4, name: 'Vikram', role: 'DevOps' },
+  { id: 5, name: 'Pooja', role: 'Product Manager' },
+  { id: 6, name: 'Sanjay', role: 'Backend Engineer' },
+  { id: 7, name: 'Meera', role: 'Frontend Engineer' },
+  { id: 8, name: 'Kabir', role: 'QA' },
+  { id: 9, name: 'Anika', role: 'UX Designer' },
+  { id: 10, name: 'Farhan', role: 'Engineer' }
 ];
 
 // ---- Temporary create + override + delete stores ----
@@ -193,6 +191,7 @@ const swaggerSpec = swaggerJSDoc(swaggerOptions);
  *       200:
  *         description: List of users
  */
+
 // ---- GET /users (optional API key) ----
 app.get('/users', apiKeyOptional, (req,res)=>{
   if (!validateKnownParams(req.query, ['limit','sort'], res)) return;
@@ -236,6 +235,7 @@ app.get('/users', apiKeyOptional, (req,res)=>{
  *       404:
  *         description: User not found
  */
+
 // ---- GET /getUser (API key required) ----
 app.get('/getUser', apiKeyRequired, (req,res)=>{
   // allow id, name, role (STRICT_PARAMS still enforced)
@@ -307,6 +307,8 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
  *       404:
  *         description: User not found
  */
+
+
 app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   const id = parseId(req.params.id);
   if (id.value===null) return badRequest(res,'Route parameter "id" must be a positive integer');
@@ -462,5 +464,6 @@ app.get('/', (req,res)=>{
 
 // Global error handler
 app.use((err, req, res, next)=>{ console.error('Unhandled error:', err); return res.status(500).json({ status:500, error:'Internal Server Error', message: err?.message || 'Unexpected error' }); });
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.listen(PORT, '0.0.0.0', ()=>{ console.log(`Mock Users API (delete TTL ${TTL_MINUTES}m) running at http://localhost:${PORT}`); });
