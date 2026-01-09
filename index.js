@@ -148,16 +148,53 @@ app.get('/users', apiKeyOptional, (req,res)=>{
 
 // ---- GET /getUser (API key required) ----
 app.get('/getUser', apiKeyRequired, (req,res)=>{
-  if (!validateKnownParams(req.query, ['id'], res)) return;
-  const { id:idStr } = req.query;
+  // allow id, name, role (STRICT_PARAMS still enforced)
+  if (!validateKnownParams(req.query, ['id', 'name', 'role'], res)) return;
+
+  const { id: idStr, name, role } = req.query;
   const id = parseId(idStr);
-  const list = combinedUsers();
-  if (!id.provided) return sendWithETag(req,res,list);
-  if (id.value===null) return badRequest(res,'Query parameter "id" must be a positive integer');
-  const match = list.find(u=>u.id===id.value);
-  if (!match) return notFound(res,'User not found');
-  return res.status(200).json({ status:200, count:1, data:[match] });
+
+  let list = combinedUsers();
+
+  // --- existing ID logic (UNCHANGED BEHAVIOR) ---
+  if (id.provided) {
+    if (id.value === null)
+      return badRequest(res,'Query parameter "id" must be a positive integer');
+
+    list = list.filter(u => u.id === id.value);
+  }
+
+  // --- NEW: name filter ---
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim() === '')
+      return badRequest(res,'Query parameter "name" must be a non-empty string');
+
+    list = list.filter(
+      u => u.name.toLowerCase() === name.trim().toLowerCase()
+    );
+  }
+
+  // --- NEW: role filter ---
+  if (role !== undefined) {
+    if (typeof role !== 'string' || role.trim() === '')
+      return badRequest(res,'Query parameter "role" must be a non-empty string');
+
+    list = list.filter(
+      u => u.role.toLowerCase() === role.trim().toLowerCase()
+    );
+  }
+
+  if (list.length === 0)
+    return notFound(res,'User not found');
+
+  // preserve original response structure
+  return res.status(200).json({
+    status: 200,
+    count: list.length,
+    data: list
+  });
 });
+
 
 app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   const id = parseId(req.params.id);
