@@ -3,7 +3,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-
+//swagger UI
+const swaggerUi = require('swagger-ui-express');
+const swaggerJSDoc = require('swagger-jsdoc');
+//swagger UI ends
 const app = express();
 const PORT = process.env.PORT || 3000;
 const REQUIRED_API_KEY = process.env.API_KEY || null; // optional for /users
@@ -19,16 +22,18 @@ app.use(express.json());
 
 // ---- Base users ----
 const baseUsers = [
-  { id: 1, name: 'Asha',  role: 'Engineer' },
-  { id: 2, name: 'Rahul', role: 'QA' },
-  { id: 3, name: 'Neha',  role: 'Designer' },
-  { id: 4, name: 'Vikram', role: 'DevOps' },
-  { id: 5, name: 'Pooja', role: 'Product Manager' },
-  { id: 6, name: 'Sanjay', role: 'Backend Engineer' },
-  { id: 7, name: 'Meera', role: 'Frontend Engineer' },
-  { id: 8, name: 'Kabir', role: 'QA' },
-  { id: 9, name: 'Anika', role: 'UX Designer' },
-  { id: 10, name: 'Farhan', role: 'Engineer' }
+  { id: 1, name: 'Milind',  role: 'Engineer' },
+  { id: 2, name: 'Sunita', role: 'QA' },
+  { id: 3, name: 'Seha',  role: 'Designer' },
+  { id: 4, name: 'Omansh', role: 'DevOps' },
+  { id: 5, name: 'Ritesh', role: 'Product Manager' },
+  { id: 6, name: 'Namrata', role: 'Backend Engineer' },
+  { id: 7, name: 'Harshika', role: 'Frontend Engineer' },
+  { id: 8, name: 'Nityam', role: 'QA' },
+  { id: 9, name: 'Mahesh', role: 'UX Designer' },
+  { id: 10, name: 'Garvita', role: 'Engineer' },
+  { id: 11, name: 'Ishaan', role: 'Delivery Manager' },
+  { id: 12, name: 'Riddhi', role: 'Program Manager' }
 ];
 
 // ---- Temporary create + override + delete stores ----
@@ -132,7 +137,62 @@ function validateKnownParams(query, knownKeys, res){ if (!STRICT_PARAMS) return 
 function nextId(){ const maxBase = Math.max(...baseUsers.map(u=>u.id)); let maxTemp = 0; for (const u of tempUsers.values()) { if (u.id>maxTemp) maxTemp = u.id; } return Math.max(maxBase, maxTemp)+1; }
 function baseUserById(id){ return baseUsers.find(u=>u.id===id) || null; }
 function userExistsAnywhere(id){ return !!baseUserById(id) || tempUsers.has(id); }
+//swagger UI
+const swaggerOptions = {
+  definition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Mock Users API',
+      version: '1.0.0',
+      description: 'Mock API for student validation, testing, and automation'
+    },
+    servers: [
+      {
+        url: 'https://automatedscript-api.onrender.com',
+        description: 'Production'
+      },
+      {
+        url: 'http://localhost:3000',
+        description: 'Local'
+      }
+    ],
+    components: {
+      securitySchemes: {
+        ApiKeyAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'x-api-key'
+        }
+      }
+    },
+    security: [{ ApiKeyAuth: [] }]
+  },
+  apis: ['./index.js'] // read JSDoc from same file
+};
 
+const swaggerSpec = swaggerJSDoc(swaggerOptions);
+//Swagger UI Ends
+/**
+ * @swagger
+ * /users:
+ *   get:
+ *     summary: Get all users
+ *     tags:
+ *       - Users
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *     responses:
+ *       200:
+ *         description: List of users
+ */
 // ---- GET /users (optional API key) ----
 app.get('/users', apiKeyOptional, (req,res)=>{
   if (!validateKnownParams(req.query, ['limit','sort'], res)) return;
@@ -145,7 +205,37 @@ app.get('/users', apiKeyOptional, (req,res)=>{
   if (limit.value) list = list.slice(0, limit.value);
   return sendWithETag(req,res,list); // 200 or 304
 });
-
+/**
+ * @swagger
+ * /getUser:
+ *   get:
+ *     summary: Get users by query parameters
+ *     description: Fetch users by id, name, or role (supports partial role search)
+ *     tags:
+ *       - Users
+ *     parameters:
+ *       - in: query
+ *         name: id
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: name
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: User(s) found
+ *       400:
+ *         description: Bad Request
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
 // ---- GET /getUser (API key required) ----
 app.get('/getUser', apiKeyRequired, (req,res)=>{
   // allow id, name, role (STRICT_PARAMS still enforced)
@@ -170,7 +260,8 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
       return badRequest(res,'Query parameter "name" must be a non-empty string');
 
     list = list.filter(
-      u => u.name.toLowerCase() === name.trim().toLowerCase()
+      //u => u.name.toLowerCase() === name.trim().toLowerCase()
+      u => u.name.toLowerCase().includes(name.trim().toLowerCase())
     );
   }
 
@@ -180,7 +271,7 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
       return badRequest(res,'Query parameter "role" must be a non-empty string');
 
     list = list.filter(
-      u => u.role.toLowerCase() === role.trim().toLowerCase()
+      u => u.role.toLowerCase().includes(role.trim().toLowerCase())
     );
   }
 
@@ -195,7 +286,27 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
   });
 });
 
-
+/**
+ * @swagger
+ * /getUser/{id}:
+ *   get:
+ *     summary: Get user by ID
+ *     tags:
+ *       - Users
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: User found
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
 app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   const id = parseId(req.params.id);
   if (id.value===null) return badRequest(res,'Route parameter "id" must be a positive integer');
