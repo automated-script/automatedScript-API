@@ -317,6 +317,38 @@ app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   if (!match) return notFound(res,'User not found');
   return res.status(200).json({ status:200, count:1, data:[match] });
 });
+/**
+ * @swagger
+ * /createUser:
+ *   post:
+ *     summary: Create a temporary user (TTL based)
+ *     tags: [Users]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, role]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *               name:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: User created temporarily
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       422:
+ *         description: ID already exists
+ */
 
 // ---- POST /createUser (API key required) ----
 app.post('/createUser', requireJson, apiKeyRequired, (req,res)=>{
@@ -360,6 +392,41 @@ function handleUpdateOverride(idNum, body, res){
   const updated = { id: base.id, name: override.name ?? base.name, role: override.role ?? base.role };
   return res.status(200).json({ status:200, message:'User updated temporarily', ttlMinutes:TTL_MINUTES, expiresAt, data: updated });
 }
+/**
+ * @swagger
+ * /updateUser/{id}:
+ *   put:
+ *     summary: Update base user temporarily by ID
+ *     tags: [Users]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
 
 app.put('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
   const idNum = Number(req.params.id);
@@ -374,6 +441,39 @@ app.put('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
   if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Field "id" must be a positive integer');
   return handleUpdateOverride(idNum, req.body, res);
 });
+/**
+ * @swagger
+ * /updateUser/{id}:
+ *   patch:
+ *     summary: Partially update base user temporarily
+ *     tags: [Users]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Validation error
+ *       401:
+ *         description: Unauthorized
+ */
 
 app.patch('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
   const idNum = Number(req.params.id);
@@ -388,6 +488,28 @@ app.patch('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
   if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Field "id" must be a positive integer');
   return handleUpdateOverride(idNum, req.body, res);
 });
+/**
+ * @swagger
+ * /deleteUser/{id}:
+ *   delete:
+ *     summary: Temporarily delete a base user (TTL based)
+ *     tags: [Users]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: User temporarily deleted
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: User not found
+ */
 
 // ---- DELETE /deleteUser/:id (temporary delete override) ----
 app.delete('/deleteUser/:id', apiKeyRequired, (req,res)=>{
@@ -416,6 +538,30 @@ app.delete('/deleteUser', requireJson, apiKeyRequired, (req,res)=>{
   setTimeout(()=>{ tempOverrides.delete(idNum); }, TTL_MS);
   return res.status(200).json({ status:200, message:'User temporarily deleted', ttlMinutes:TTL_MINUTES, expiresAt, data:{ id:idNum } });
 });
+/**
+ * @swagger
+ * /users/{id}:
+ *   delete:
+ *     summary: Permanently delete a temporary user
+ *     tags: [Users]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       204:
+ *         description: User deleted
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Cannot delete base users
+ *       404:
+ *         description: User not found
+ */
 
 // ---- Existing permanent DELETE for temp-created users (unchanged) ----
 app.delete('/users/:id', apiKeyRequired, (req,res)=>{
@@ -426,6 +572,18 @@ app.delete('/users/:id', apiKeyRequired, (req,res)=>{
   tempUsers.delete(id);
   return res.status(204).end();
 });
+/**
+ * @swagger
+ * /users-limited:
+ *   get:
+ *     summary: Rate limited users endpoint (429 demo)
+ *     tags: [Demos]
+ *     responses:
+ *       200:
+ *         description: Users returned
+ *       429:
+ *         description: Rate limit exceeded
+ */
 
 // ---- Other demos retained ----
 app.get('/users-limited', (req,res,next)=>{
@@ -443,8 +601,33 @@ app.get('/users-limited', (req,res,next)=>{
   const list = combinedUsers();
   return res.status(200).json({ status:200, count:list.length, data:list });
 });
+/**
+ * @swagger
+ * /simulate-error:
+ *   get:
+ *     summary: Simulate 500 internal server error
+ *     tags: [Demos]
+ *     responses:
+ *       500:
+ *         description: Internal Server Error
+ */
 
 app.get('/simulate-error', (req,res)=>{ return res.status(500).json({ status:500, error:'Internal Server Error', message:'Simulated failure' }); });
+/**
+ * @swagger
+ * /secure/ping:
+ *   get:
+ *     summary: Secured endpoint to validate API key
+ *     tags: [Security]
+ *     security:
+ *       - ApiKeyAuth: []
+ *     responses:
+ *       200:
+ *         description: Authorized
+ *       401:
+ *         description: Unauthorized
+ */
+
 app.get('/secure/ping', apiKeyRequired, (req,res)=>{ return res.status(200).json({ status:200, message:'Authorized' }); });
 
 // Root
