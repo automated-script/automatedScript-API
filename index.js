@@ -140,9 +140,9 @@ const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'Mock Users API',
+      title: 'AutomatedScript Mock Test API',
       version: '1.0.0',
-      description: 'Mock API for student validation, testing, and automation'
+      description: 'Simulated Student Validation API for Quality Assurance, Testing, and Automated Processes'
     },
     servers: [
       {
