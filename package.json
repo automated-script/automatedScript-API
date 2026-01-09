@@ -1,0 +1,15 @@
+{
+  "name": "mock-users-api-delete-ttl",
+  "version": "1.6.0",
+  "description": "Mock Users API with TTL for create, update (PUT/PATCH), and temporary delete (DELETE /deleteUser), plus comprehensive validations and status coverage",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1"
+  }
+}
