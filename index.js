@@ -38,12 +38,32 @@ const baseUsers = [
 const tempUsers = new Map();       // id -> {id,name,role,expiresAt}
 const tempOverrides = new Map();   // id -> {id,name?,role?,deleted?,expiresAt}
 
+// ---- NEW: Access Token store (in-memory; does not affect existing APIs) ----
+const ACCESS_TOKEN_TTL_MINUTES = Number(process.env.ACCESS_TOKEN_TTL_MINUTES || 30);
+const ACCESS_TOKEN_TTL_MS = ACCESS_TOKEN_TTL_MINUTES * 60 * 1000;
+// token -> { token, createdAt, expiresAt }
+const accessTokens = new Map();
+// ---- NEW: Access Token ends ----
+
 const now = () => Date.now();
 function pruneExpired(){
   const t = now();
   for (const [id,u] of tempUsers.entries()) { if (u.expiresAt <= t) tempUsers.delete(id); }
   for (const [id,o] of tempOverrides.entries()) { if (o.expiresAt <= t) tempOverrides.delete(id); }
 }
+
+// ---- NEW: Access Token helpers ----
+function pruneExpiredAccessTokens(){
+  const t = now();
+  for (const [token,obj] of accessTokens.entries()){
+    if (obj.expiresAt <= t) accessTokens.delete(token);
+  }
+}
+function generateAccessToken(){
+  // 32 bytes -> 64 hex characters (industry-standard length)
+  return crypto.randomBytes(32).toString('hex');
+}
+// ---- NEW: Access Token helpers ends ----
 
 function combinedUsers(){
   pruneExpired();
@@ -119,6 +139,34 @@ function apiKeyOptional(req,res,next){
   if (!key || key !== REQUIRED_API_KEY) return unauthorized(res, 'Invalid or missing API key');
   next();
 }
+
+// ---- NEW: Access Token middleware (does not affect existing APIs) ----
+function accessTokenRequired(req,res,next){
+  pruneExpiredAccessTokens();
+
+  // Support either:
+  // 1) Authorization: Bearer <token>
+  // 2) x-access-token: <token>
+  const auth = req.headers['authorization'] || '';
+  const bearerToken = auth.toLowerCase().startsWith('bearer ')
+    ? auth.slice(7).trim()
+    : null;
+
+  const token = bearerToken || req.headers['x-access-token'];
+
+  if (!token || typeof token !== 'string' || token.trim() === '') {
+    return unauthorized(res, 'Invalid or missing access token');
+  }
+
+  const record = accessTokens.get(token);
+  if (!record) {
+    return unauthorized(res, 'Invalid or expired access token');
+  }
+
+  next();
+}
+// ---- NEW: Access Token middleware ends ----
+
 function requireJson(req,res,next){
   const ct = req.headers['content-type']||'';
   if (!ct.toLowerCase().includes('application/json')) return unsupportedMediaType(res);
@@ -135,14 +183,15 @@ function validateKnownParams(query, knownKeys, res){ if (!STRICT_PARAMS) return 
 function nextId(){ const maxBase = Math.max(...baseUsers.map(u=>u.id)); let maxTemp = 0; for (const u of tempUsers.values()) { if (u.id>maxTemp) maxTemp = u.id; } return Math.max(maxBase, maxTemp)+1; }
 function baseUserById(id){ return baseUsers.find(u=>u.id===id) || null; }
 function userExistsAnywhere(id){ return !!baseUserById(id) || tempUsers.has(id); }
+
 //swagger UI
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'AutomatedScript Mock Test API',
+      title: 'Mock Users API',
       version: '1.0.0',
-      description: 'Simulated Student Validation API for Quality Assurance, Testing, and Automated Processes'
+      description: 'Mock API for student validation, testing, and automation'
     },
     servers: [
       {
@@ -160,6 +209,12 @@ const swaggerOptions = {
           type: 'apiKey',
           in: 'header',
           name: 'x-api-key'
+        },
+        // NEW: Access token auth schema for Swagger UI
+        AccessTokenAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'Token'
         }
       }
     },
@@ -170,6 +225,7 @@ const swaggerOptions = {
 
 const swaggerSpec = swaggerJSDoc(swaggerOptions);
 //Swagger UI Ends
+
 /**
  * @swagger
  * /users:
@@ -204,6 +260,7 @@ app.get('/users', apiKeyOptional, (req,res)=>{
   if (limit.value) list = list.slice(0, limit.value);
   return sendWithETag(req,res,list); // 200 or 304
 });
+
 /**
  * @swagger
  * /getUser:
@@ -254,18 +311,17 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
     list = list.filter(u => u.id === id.value);
   }
 
-  // --- NEW: name filter ---
+  // --- name filter (partial search) ---
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim() === '')
       return badRequest(res,'Query parameter "name" must be a non-empty string');
 
     list = list.filter(
-      //u => u.name.toLowerCase() === name.trim().toLowerCase()
       u => u.name.toLowerCase().includes(name.trim().toLowerCase())
     );
   }
 
-  // --- NEW: role filter ---
+  // --- role filter (partial search) ---
   if (role !== undefined) {
     if (typeof role !== 'string' || role.trim() === '')
       return badRequest(res,'Query parameter "role" must be a non-empty string');
@@ -308,7 +364,6 @@ app.get('/getUser', apiKeyRequired, (req,res)=>{
  *         description: User not found
  */
 
-
 app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   const id = parseId(req.params.id);
   if (id.value===null) return badRequest(res,'Route parameter "id" must be a positive integer');
@@ -317,14 +372,68 @@ app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
   if (!match) return notFound(res,'User not found');
   return res.status(200).json({ status:200, count:1, data:[match] });
 });
+
+// -------------------- NEW ENDPOINTS (ONLY ADDITIONS) --------------------
+
 /**
  * @swagger
- * /createUser:
- *   post:
- *     summary: Create a temporary user (TTL based)
- *     tags: [Users]
+ * /accessToken:
+ *   get:
+ *     summary: Generate access token (mock)
+ *     tags:
+ *       - Security
+ *     responses:
+ *       200:
+ *         description: Access token generated
+ */
+app.get('/accessToken', (req, res) => {
+  pruneExpiredAccessTokens();
+
+  const token = generateAccessToken();
+  const createdAt = now();
+  const expiresAt = createdAt + ACCESS_TOKEN_TTL_MS;
+
+  accessTokens.set(token, { token, createdAt, expiresAt });
+
+  return res.status(200).json({
+    status: 200,
+    message: 'Access token generated',
+    accessToken: token,
+    tokenType: 'Bearer',
+    ttlMinutes: ACCESS_TOKEN_TTL_MINUTES,
+    expiresAt
+  });
+});
+
+/**
+ * @swagger
+ * /getUserByAccessToken:
+ *   get:
+ *     summary: Get users list using access token auth
+ *     tags:
+ *       - Security
  *     security:
- *       - ApiKeyAuth: []
+ *       - AccessTokenAuth: []
+ *     responses:
+ *       200:
+ *         description: List of users
+ *       401:
+ *         description: Unauthorized
+ */
+app.get('/getUserByAccessToken', accessTokenRequired, (req, res) => {
+  const list = combinedUsers();
+  return sendWithETag(req, res, list);
+});
+
+/**
+ * @swagger
+ * /createUserByAccessToken:
+ *   post:
+ *     summary: Create a temporary user (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -341,13 +450,280 @@ app.get('/getUser/:id', apiKeyRequired, (req,res)=>{
  *                 type: string
  *     responses:
  *       201:
- *         description: User created temporarily
+ *         description: User created (temporary)
  *       400:
- *         description: Validation error
+ *         description: Bad Request
  *       401:
  *         description: Unauthorized
  *       422:
- *         description: ID already exists
+ *         description: Unprocessable Entity
+ */
+app.post('/createUserByAccessToken', requireJson, accessTokenRequired, (req,res)=>{
+  // SAME validations as /createUser (copied as-is)
+  const { name, role, id } = req.body || {};
+  if (isEmpty(name) || typeof name!=='string') return badRequest(res,'Field "name" is required and must be a non-empty string');
+  if (isEmpty(role) || typeof role!=='string') return badRequest(res,'Field "role" is required and must be a non-empty string');
+  let newId;
+  if (!isEmpty(id)){
+    const num = Number(id);
+    if (!Number.isInteger(num) || num<=0) return badRequest(res,'Field "id" must be a positive integer');
+    if (userExistsAnywhere(num)) return unprocessable(res,'Field "id" already exists');
+    newId = num;
+  } else {
+    newId = nextId();
+  }
+  const expiresAt = now()+TTL_MS;
+  const tempUser = { id:newId, name:String(name).trim(), role:String(role).trim(), expiresAt };
+  tempUsers.set(newId, tempUser);
+  setTimeout(()=>{ tempUsers.delete(newId); }, TTL_MS);
+  res.set('Location', `/getUser/${newId}`);
+  return res.status(201).json({ status:201, message:'User created (temporary)', data:{ id:newId, name:tempUser.name, role:tempUser.role }, ttlMinutes:TTL_MINUTES, expiresAt });
+});
+
+/**
+ * @swagger
+ * /updateUserByAccessToken/{id}:
+ *   put:
+ *     summary: Update base user temporarily by ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               role: { type: string }
+ *     responses:
+ *       200: { description: User updated temporarily }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ *   patch:
+ *     summary: Partially update base user temporarily by ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string }
+ *               role: { type: string }
+ *     responses:
+ *       200: { description: User updated temporarily }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ */
+
+// new token-based update endpoints, using EXACT same validations via handleUpdateOverride
+app.put('/updateUserByAccessToken/:id', requireJson, accessTokenRequired, (req,res)=>{
+  const idNum = Number(req.params.id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Route parameter "id" must be a positive integer');
+  return handleUpdateOverride(idNum, req.body, res);
+});
+app.patch('/updateUserByAccessToken/:id', requireJson, accessTokenRequired, (req,res)=>{
+  const idNum = Number(req.params.id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Route parameter "id" must be a positive integer');
+  return handleUpdateOverride(idNum, req.body, res);
+});
+
+/**
+ * @swagger
+ * /updateUserByAccessToken:
+ *   put:
+ *     summary: Update base user temporarily by body ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id: { type: integer }
+ *               name: { type: string }
+ *               role: { type: string }
+ *     responses:
+ *       200: { description: User updated temporarily }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ *   patch:
+ *     summary: Partially update base user temporarily by body ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id: { type: integer }
+ *               name: { type: string }
+ *               role: { type: string }
+ *     responses:
+ *       200: { description: User updated temporarily }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ */
+
+app.put('/updateUserByAccessToken', requireJson, accessTokenRequired, (req,res)=>{
+  const { id } = req.body || {};
+  if (isEmpty(id)) return badRequest(res,'Field "id" is required');
+  const idNum = Number(id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Field "id" must be a positive integer');
+  return handleUpdateOverride(idNum, req.body, res);
+});
+app.patch('/updateUserByAccessToken', requireJson, accessTokenRequired, (req,res)=>{
+  const { id } = req.body || {};
+  if (isEmpty(id)) return badRequest(res,'Field "id" is required');
+  const idNum = Number(id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Field "id" must be a positive integer');
+  return handleUpdateOverride(idNum, req.body, res);
+});
+
+/**
+ * @swagger
+ * /deleteUserByAccessToken/{id}:
+ *   delete:
+ *     summary: Temporarily delete a base user by ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200: { description: User temporarily deleted }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ */
+app.delete('/deleteUserByAccessToken/:id', accessTokenRequired, (req,res)=>{
+  // SAME validations + logic as /deleteUser/:id (copied as-is, just auth changed)
+  const idNum = Number(req.params.id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Route parameter "id" must be a positive integer');
+  const base = baseUserById(idNum);
+  if (!base) return notFound(res,'Only base users can be temporarily deleted');
+  const expiresAt = now()+TTL_MS;
+  const override = { id:idNum, deleted:true, expiresAt };
+  tempOverrides.set(idNum, override);
+  setTimeout(()=>{ tempOverrides.delete(idNum); }, TTL_MS);
+  return res.status(200).json({ status:200, message:'User temporarily deleted', ttlMinutes:TTL_MINUTES, expiresAt, data:{ id:idNum } });
+});
+
+/**
+ * @swagger
+ * /deleteUserByAccessToken:
+ *   delete:
+ *     summary: Temporarily delete a base user by body ID (access token auth)
+ *     tags:
+ *       - Security
+ *     security:
+ *       - AccessTokenAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id: { type: integer }
+ *     responses:
+ *       200: { description: User temporarily deleted }
+ *       400: { description: Bad Request }
+ *       401: { description: Unauthorized }
+ *       404: { description: Not Found }
+ */
+app.delete('/deleteUserByAccessToken', requireJson, accessTokenRequired, (req,res)=>{
+  // SAME validations + logic as /deleteUser (copied as-is, just auth changed)
+  const { id } = req.body || {};
+  if (isEmpty(id)) return badRequest(res,'Field "id" is required');
+  const idNum = Number(id);
+  if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Field "id" must be a positive integer');
+  const base = baseUserById(idNum);
+  if (!base) return notFound(res,'Only base users can be temporarily deleted');
+  const expiresAt = now()+TTL_MS;
+  const override = { id:idNum, deleted:true, expiresAt };
+  tempOverrides.set(idNum, override);
+  setTimeout(()=>{ tempOverrides.delete(idNum); }, TTL_MS);
+  return res.status(200).json({ status:200, message:'User temporarily deleted', ttlMinutes:TTL_MINUTES, expiresAt, data:{ id:idNum } });
+});
+
+// -------------------- NEW ENDPOINTS END --------------------
+
+/**
+ * @swagger
+ * /createUser:
+ *   post:
+ *     summary: Create a temporary user (TTL-based)
+ *     description: Creates a user temporarily (stored in memory). The user auto-expires after configured TTL.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, role]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 101
+ *                 description: Optional. If not provided, API generates next ID.
+ *               name:
+ *                 type: string
+ *                 example: "Rohit"
+ *               role:
+ *                 type: string
+ *                 example: "Engineer"
+ *     responses:
+ *       201:
+ *         description: User created temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ *       422:
+ *         description: Unprocessable Entity (ID already exists)
  */
 
 // ---- POST /createUser (API key required) ----
@@ -396,8 +772,10 @@ function handleUpdateOverride(idNum, body, res){
  * @swagger
  * /updateUser/{id}:
  *   put:
- *     summary: Update base user temporarily by ID
- *     tags: [Users]
+ *     summary: Update base user temporarily (PUT)
+ *     description: Updates base user temporarily (stored as override). Changes auto-expire after TTL.
+ *     tags:
+ *       - Users
  *     security:
  *       - ApiKeyAuth: []
  *     parameters:
@@ -406,6 +784,7 @@ function handleUpdateOverride(idNum, body, res){
  *         required: true
  *         schema:
  *           type: integer
+ *         example: 2
  *     requestBody:
  *       required: true
  *       content:
@@ -415,17 +794,59 @@ function handleUpdateOverride(idNum, body, res){
  *             properties:
  *               name:
  *                 type: string
+ *                 example: "Rahul Updated"
  *               role:
  *                 type: string
+ *                 example: "Senior QA"
  *     responses:
  *       200:
  *         description: User updated temporarily
  *       400:
- *         description: Validation error
+ *         description: Bad request / validation error
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized (missing/wrong API key)
  *       404:
- *         description: User not found
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ *   patch:
+ *     summary: Update base user temporarily (PATCH)
+ *     description: Partial update of base user temporarily. Changes auto-expire after TTL.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 2
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "Rahul Patch"
+ *               role:
+ *                 type: string
+ *                 example: "QA Lead"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
  */
 
 app.put('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
@@ -433,6 +854,80 @@ app.put('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
   if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Route parameter "id" must be a positive integer');
   return handleUpdateOverride(idNum, req.body, res);
 });
+/**
+ * @swagger
+ * /updateUser:
+ *   put:
+ *     summary: Update base user temporarily by request body ID (PUT)
+ *     description: Updates base user temporarily using "id" inside request body.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 3
+ *               name:
+ *                 type: string
+ *                 example: "Neha Updated"
+ *               role:
+ *                 type: string
+ *                 example: "Senior Designer"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ *   patch:
+ *     summary: Update base user temporarily by request body ID (PATCH)
+ *     description: Partial update of base user temporarily using "id" inside request body.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 3
+ *               name:
+ *                 type: string
+ *                 example: "Neha Patch"
+ *               role:
+ *                 type: string
+ *                 example: "UI/UX Designer"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ */
 
 app.put('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
   const { id } = req.body || {};
@@ -444,9 +939,11 @@ app.put('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
 /**
  * @swagger
  * /updateUser/{id}:
- *   patch:
- *     summary: Partially update base user temporarily
- *     tags: [Users]
+ *   put:
+ *     summary: Update base user temporarily (PUT)
+ *     description: Updates base user temporarily (stored as override). Changes auto-expire after TTL.
+ *     tags:
+ *       - Users
  *     security:
  *       - ApiKeyAuth: []
  *     parameters:
@@ -455,6 +952,7 @@ app.put('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
  *         required: true
  *         schema:
  *           type: integer
+ *         example: 2
  *     requestBody:
  *       required: true
  *       content:
@@ -464,15 +962,59 @@ app.put('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
  *             properties:
  *               name:
  *                 type: string
+ *                 example: "Rahul Updated"
  *               role:
  *                 type: string
+ *                 example: "Senior QA"
  *     responses:
  *       200:
  *         description: User updated temporarily
  *       400:
- *         description: Validation error
+ *         description: Bad request / validation error
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ *   patch:
+ *     summary: Update base user temporarily (PATCH)
+ *     description: Partial update of base user temporarily. Changes auto-expire after TTL.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *         example: 2
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "Rahul Patch"
+ *               role:
+ *                 type: string
+ *                 example: "QA Lead"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
  */
 
 app.patch('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
@@ -480,6 +1022,80 @@ app.patch('/updateUser/:id', requireJson, apiKeyRequired, (req,res)=>{
   if (!Number.isInteger(idNum) || idNum<=0) return badRequest(res,'Route parameter "id" must be a positive integer');
   return handleUpdateOverride(idNum, req.body, res);
 });
+/**
+ * @swagger
+ * /updateUser:
+ *   put:
+ *     summary: Update base user temporarily by request body ID (PUT)
+ *     description: Updates base user temporarily using "id" inside request body.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 3
+ *               name:
+ *                 type: string
+ *                 example: "Neha Updated"
+ *               role:
+ *                 type: string
+ *                 example: "Senior Designer"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ *   patch:
+ *     summary: Update base user temporarily by request body ID (PATCH)
+ *     description: Partial update of base user temporarily using "id" inside request body.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 3
+ *               name:
+ *                 type: string
+ *                 example: "Neha Patch"
+ *               role:
+ *                 type: string
+ *                 example: "UI/UX Designer"
+ *     responses:
+ *       200:
+ *         description: User updated temporarily
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be updated temporarily)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ */
 
 app.patch('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
   const { id } = req.body || {};
@@ -492,8 +1108,10 @@ app.patch('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
  * @swagger
  * /deleteUser/{id}:
  *   delete:
- *     summary: Temporarily delete a base user (TTL based)
- *     tags: [Users]
+ *     summary: Temporarily delete a base user by ID (TTL-based)
+ *     description: Temporarily hides base user for TTL duration using delete override.
+ *     tags:
+ *       - Users
  *     security:
  *       - ApiKeyAuth: []
  *     parameters:
@@ -502,13 +1120,16 @@ app.patch('/updateUser', requireJson, apiKeyRequired, (req,res)=>{
  *         required: true
  *         schema:
  *           type: integer
+ *         example: 4
  *     responses:
  *       200:
  *         description: User temporarily deleted
+ *       400:
+ *         description: Bad request / validation error
  *       401:
- *         description: Unauthorized
+ *         description: Unauthorized (missing/wrong API key)
  *       404:
- *         description: User not found
+ *         description: Not Found (Only base users can be temporarily deleted)
  */
 
 // ---- DELETE /deleteUser/:id (temporary delete override) ----
@@ -523,6 +1144,39 @@ app.delete('/deleteUser/:id', apiKeyRequired, (req,res)=>{
   setTimeout(()=>{ tempOverrides.delete(idNum); }, TTL_MS);
   return res.status(200).json({ status:200, message:'User temporarily deleted', ttlMinutes:TTL_MINUTES, expiresAt, data:{ id:idNum } });
 });
+/**
+ * @swagger
+ * /deleteUser:
+ *   delete:
+ *     summary: Temporarily delete a base user by request body ID (TTL-based)
+ *     description: Temporarily hides base user for TTL duration using delete override.
+ *     tags:
+ *       - Users
+ *     security:
+ *       - ApiKeyAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [id]
+ *             properties:
+ *               id:
+ *                 type: integer
+ *                 example: 4
+ *     responses:
+ *       200:
+ *         description: User temporarily deleted
+ *       400:
+ *         description: Bad request / validation error
+ *       401:
+ *         description: Unauthorized (missing/wrong API key)
+ *       404:
+ *         description: Not Found (Only base users can be temporarily deleted)
+ *       415:
+ *         description: Unsupported Media Type (Content-Type must be application/json)
+ */
 
 // ---- DELETE /deleteUser (body includes id) ----
 app.delete('/deleteUser', requireJson, apiKeyRequired, (req,res)=>{
@@ -543,7 +1197,9 @@ app.delete('/deleteUser', requireJson, apiKeyRequired, (req,res)=>{
  * /users/{id}:
  *   delete:
  *     summary: Permanently delete a temporary user
- *     tags: [Users]
+ *     description: Permanently deletes ONLY temporary users created via /createUser. Base users cannot be deleted (403).
+ *     tags:
+ *       - Users
  *     security:
  *       - ApiKeyAuth: []
  *     parameters:
@@ -552,15 +1208,18 @@ app.delete('/deleteUser', requireJson, apiKeyRequired, (req,res)=>{
  *         required: true
  *         schema:
  *           type: integer
+ *         example: 101
  *     responses:
  *       204:
- *         description: User deleted
+ *         description: User permanently deleted
+ *       400:
+ *         description: Bad request / invalid id
  *       401:
  *         description: Unauthorized
  *       403:
- *         description: Cannot delete base users
+ *         description: Forbidden (Cannot delete base users)
  *       404:
- *         description: User not found
+ *         description: Not Found (User not found or expired)
  */
 
 // ---- Existing permanent DELETE for temp-created users (unchanged) ----
@@ -576,13 +1235,15 @@ app.delete('/users/:id', apiKeyRequired, (req,res)=>{
  * @swagger
  * /users-limited:
  *   get:
- *     summary: Rate limited users endpoint (429 demo)
- *     tags: [Demos]
+ *     summary: Rate limited endpoint (429 demo)
+ *     description: Demo endpoint to simulate rate limiting. Returns 429 after exceeding threshold.
+ *     tags:
+ *       - Demos
  *     responses:
  *       200:
  *         description: Users returned
  *       429:
- *         description: Rate limit exceeded
+ *         description: Too Many Requests (rate limit exceeded)
  */
 
 // ---- Other demos retained ----
@@ -605,11 +1266,12 @@ app.get('/users-limited', (req,res,next)=>{
  * @swagger
  * /simulate-error:
  *   get:
- *     summary: Simulate 500 internal server error
- *     tags: [Demos]
+ *     summary: Simulate server error (500 demo)
+ *     tags:
+ *       - Demos
  *     responses:
  *       500:
- *         description: Internal Server Error
+ *         description: Internal Server Error (simulated)
  */
 
 app.get('/simulate-error', (req,res)=>{ return res.status(500).json({ status:500, error:'Internal Server Error', message:'Simulated failure' }); });
@@ -617,8 +1279,10 @@ app.get('/simulate-error', (req,res)=>{ return res.status(500).json({ status:500
  * @swagger
  * /secure/ping:
  *   get:
- *     summary: Secured endpoint to validate API key
- *     tags: [Security]
+ *     summary: Authorized ping (API key check)
+ *     description: Returns 200 only if valid x-api-key is provided.
+ *     tags:
+ *       - Security
  *     security:
  *       - ApiKeyAuth: []
  *     responses:
@@ -629,6 +1293,18 @@ app.get('/simulate-error', (req,res)=>{ return res.status(500).json({ status:500
  */
 
 app.get('/secure/ping', apiKeyRequired, (req,res)=>{ return res.status(200).json({ status:200, message:'Authorized' }); });
+/**
+ * @swagger
+ * /:
+ *   get:
+ *     summary: Root endpoint
+ *     description: Lists all available endpoints and notes (TTL, strict params, token TTL, etc.)
+ *     tags:
+ *       - Meta
+ *     responses:
+ *       200:
+ *         description: API info returned
+ */
 
 // Root
 app.get('/', (req,res)=>{
@@ -636,12 +1312,16 @@ app.get('/', (req,res)=>{
     status:'ok',
     endpoints:[
       'GET /users', 'GET /getUser', 'GET /getUser/:id',
+      'GET /accessToken', 'GET /getUserByAccessToken',
+      'POST /createUserByAccessToken',
+      'PUT/PATCH /updateUserByAccessToken/:id', 'PUT/PATCH /updateUserByAccessToken',
+      'DELETE /deleteUserByAccessToken/:id', 'DELETE /deleteUserByAccessToken',
       'POST /createUser', 'PUT/PATCH /updateUser/:id', 'PUT/PATCH /updateUser',
       'DELETE /deleteUser/:id', 'DELETE /deleteUser',
       'DELETE /users/:id (temp only, 204)',
       'GET /users-limited (429 demo)', 'GET /simulate-error (500)', 'GET /secure/ping (401)'
     ],
-    notes:{ ttlMinutes: TTL_MINUTES, strictParams: STRICT_PARAMS }
+    notes:{ ttlMinutes: TTL_MINUTES, strictParams: STRICT_PARAMS, accessTokenTtlMinutes: ACCESS_TOKEN_TTL_MINUTES }
   });
 });
 
