@@ -22,16 +22,18 @@ app.use(express.json());
 
 // ---- Base users ----
 const baseUsers = [
-  { id: 1, name: 'Asha',  role: 'Engineer' },
-  { id: 2, name: 'Rahul', role: 'QA' },
-  { id: 3, name: 'Neha',  role: 'Designer' },
-  { id: 4, name: 'Vikram', role: 'DevOps' },
-  { id: 5, name: 'Pooja', role: 'Product Manager' },
-  { id: 6, name: 'Sanjay', role: 'Backend Engineer' },
-  { id: 7, name: 'Meera', role: 'Frontend Engineer' },
-  { id: 8, name: 'Kabir', role: 'QA' },
-  { id: 9, name: 'Anika', role: 'UX Designer' },
-  { id: 10, name: 'Farhan', role: 'Engineer' }
+  { id: 1, name: 'Milind',  role: 'Engineer' },
+  { id: 2, name: 'Sunita', role: 'QA' },
+  { id: 3, name: 'Seha',  role: 'Designer' },
+  { id: 4, name: 'Omansh', role: 'DevOps' },
+  { id: 5, name: 'Ritesh', role: 'Product Manager' },
+  { id: 6, name: 'Namrata', role: 'Backend Engineer' },
+  { id: 7, name: 'Harshika', role: 'Frontend Engineer' },
+  { id: 8, name: 'Nityam', role: 'QA' },
+  { id: 9, name: 'Mahesh', role: 'UX Designer' },
+  { id: 10, name: 'Garvita', role: 'Engineer' },
+  { id: 11, name: 'Ishaan', role: 'Delivery Manager' },
+  { id: 12, name: 'Riddhi', role: 'Program Manager' }
 ];
 
 // ---- Temporary create + override + delete stores ----
